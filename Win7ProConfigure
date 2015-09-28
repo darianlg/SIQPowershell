@@ -1,0 +1,295 @@
+<#######################################################################################
+Written By: Darian Garcia
+Date: 8/13/2015
+Description: This script configures new computers that already have Windows 7 
+Pro loaded on them for IQN. It fully configures them to where they are
+ready to deploy upon completion of the script.
+#######################################################################################>
+
+#This part adds the computer to the domain and preps for installs
+
+echo "Please type in your admin credentials"
+$credentials = Get-Credential
+
+echo "What is going to be the name of the computer?"
+$computername = Read-Host
+
+Rename-Computer $computername
+
+#Add the computer to the domain
+Add-Computer Denver.Iqxchange.com -Credential $credentials
+
+#Connect to the apps drive
+net use \\iqn-it00\apps $credentials
+
+mkdir "C:\temp"
+
+############################################################################################
+
+#Everything below here pipes to out-null so that it can wait for the last
+#command to finish before starting the next one
+
+#Install Google Chrome
+robocopy "\\iqn-it00\apps\Google Chrome" "C:\temp" chromeinstall-8u45.exe | Out-Null
+cmd /c "C:\temp\chromeinstall-8u45.exe /s" *>> D:\mylog.txt
+
+#Install RSA
+#Have to find the installer file for this
+robocopy "\\IQN-it00\apps\RSA\Windows_SecureID\RSASecurIDToken411" "C:\temp" RSASecurIDToken411.msi | Out-Null
+cmd /c "C:\temp\RSASecurIDToken411.msi /s" *>> D:\mylog.txt
+
+#Install Cisco VPN
+robocopy "\\IQN-it00\apps\Cisco_VPN\vpnclient_64bit" "C:\temp"  "vpnclient-winx64-msi-5.0.07.0290-k9.msi" | Out-Null
+cmd /c "C:\temp\vpnclient-winx64-msi-5.0.07.0290-k9.msi /s" *>> D:\mylog.txt
+
+#Install Java
+robocopy "\\IQN-it00\apps\Java\" "C:\temp" jre-7u67-windows-x64.exe | Out-Null
+cmd /c "jre-7u67-windows-x64.exe /s" *>> D:\mylog.txt
+
+#install Mozilla Firefox
+robocopy "\\iqn-it00\apps\Mozilla Firefox" "C:\temp" "Firefox Setup Stub 39.0.exe" | Out-Null
+cmd /c "C:\temp\Firefox Setup Stub 39.0.exe /s" *>> D:\mylog.txt
+
+#Install PeaZip
+robocopy "\\iqn-it00\apps\PeaZip" peazip-3.8.WIN64.exe | Out-Null
+cmd /c "C:\temp\peazip-3.8.WIN64.exe /s" *>> D:\mylog.txt
+
+#Install Shoretel
+robocopy "\\iqn-it00\apps\ShoreTel\Communicator_11.1" setup.exe | Out-Null
+cmd /c "C:\temp\setup.exe" *>> D:\mylog.txt
+
+#Install Adobe Reader
+robocopy "\\iqn-it00\apps\Adobe\Reader\Reader_9.4.1" "C:\temp" AdbeRdrUpd941_all_incr.msp | Out-Null
+cmd /c "C:\temp\AdbeRdrUpd941_all_incr.msp /s" *>> D:\mylog.txt
+
+#Install CutePDFWriter
+robocopy "\\IQN-it00\apps\CutePDF\Ver_2.8" "C:\temp" CuteWriter.exe | Out-Null
+cmd /c "C:\temp\CuteWriter.exe /s" *>> D:\mylog.txt
+
+#Install .Net Framework
+#Might come installed with Dot Net 4.5
+robocopy "D:\" "C:\temp" DotNet4.5 | Out-Null
+cmd /c "C:\temp\DotNet4.5 /s" *>> D:\mylog.txt
+
+#######################################################################################
+
+#Run the updates via the WSUS Server
+
+cmd /c "%windir%\system32\wuauclt.exe /detectnow" *>> D:\mylog.txt
+
+#######################################################################################
+
+
+#Run the driver updates via the CAB files
+$machine = wmic computersystem get model
+if ($machine -match 7450)
+{
+    #Select the cab files for Dell e7450
+}
+
+#######################################################################################
+
+#Run the Windows Assessment Tool (required for something, can't remember why)
+
+cmd /c "winsat formal" *>> D:\mylog.txt
+
+
+#######################################################################################
+
+#Pins Google Chrome to the taskbar
+$shell = new-object -com "Shell.Application"  
+$folder = $shell.Namespace('C:\Program Files (x86)\Google\Chrome\Application')    
+$item = $folder.Parsename('chrome.exe')
+$verb = $item.Verbs() | ? {$_.Name -eq 'Pin to Tas&kbar'}
+if ($verb) {$verb.DoIt()}
+
+#Pins Mozilla Firefox to the taskbar
+$shell = new-object -com "Shell.Application"  
+$folder = $shell.Namespace('C:\Program Files (x86)\Mozilla Firefox')    
+$item = $folder.Parsename('firefox.exe')
+$verb = $item.Verbs() | ? {$_.Name -eq 'Pin to Tas&kbar'}
+if ($verb) {$verb.DoIt()}
+
+#Pins RSA to the taskbar
+$shell = new-object -com "Shell.Application"  
+$folder = $shell.Namespace('C:\Program Files (x86)\RSA SecureID Software Token')    
+$item = $folder.Parsename('securID.exe')
+$verb = $item.Verbs() | ? {$_.Name -eq 'Pin to Tas&kbar'}
+if ($verb) {$verb.DoIt()}
+
+#Pins Cisco VPN to the taskbar
+$shell = new-object -com "Shell.Application"  
+$folder = $shell.Namespace('C:\Program Files (x86)\Cisco Systems\VPN Client')    
+$item = $folder.Parsename('vpngui.exe')
+$verb = $item.Verbs() | ? {$_.Name -eq 'Pin to Tas&kbar'}
+if ($verb) {$verb.DoIt()}
+
+############################################################################################
+
+
+#Adjust System Restore to a certain amount of GB (determine for each model)
+
+cmd /c "vssadmin resize shadowstorage /On=X /For=X /Maxsize=ChangeMe" *>> D:\mylog.txt
+
+
+############################################################################################
+
+#Set time of operating system to display to 3 seconds
+cmd /c "bcdedit /timeout 3" *>> D:\mylog.txt
+
+############################################################################################
+
+
+#Disable indexing service (keeps on if SATA Hard Drive)
+
+$check = Get-WmiObject win32_diskdrive | where { $_.model -match 'SSD'} 
+if ($check -match "true")
+{
+    function Disable-Indexing {
+    Param($Drive)
+    $obj = Get-WmiObject -Class Win32_Volume -Filter "DriveLetter='$Drive'"
+    $indexing = $obj.IndexingEnabled
+    if("$indexing" -eq $True){
+        write-host "Disabling indexing of drive $Drive"
+        $obj | Set-WmiInstance -Arguments @{IndexingEnabled=$True} | Out-Null
+    }
+}
+
+
+#Use:
+#Disable Drive Indexing on C:\
+
+Disable-Indexing "C:" *>> D:\mylog.txt
+}
+
+############################################################################################
+
+#Uncheck automatically restart for system failure
+
+Set-ItemProperty -Path Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\CrashControl -Name AutoReboot -Value 0 *>> D:\mylog.txt
+
+############################################################################################
+
+#Disbale hibernation
+cmd /c "powercfg -h off" *>> D:\mylog.txt
+
+############################################################################################
+
+#Enable Remote WMI
+
+netsh advfirewall firewall set rule group="windows management instrumentation (wmi)" new enable=yes *>> D:\mylog.txt
+
+############################################################################################
+
+#Turn off Windows Games, Windows DVD Maker, Windows Media Center, Remote Differential and Table PC Components
+#Run this to determine which features to disable
+#dism /online /get-features 
+#Windows DVD Maker, Windows Media Center, Remote Differential, & Tablet PC Components
+
+Dism /online /Disable-Feature /FeatureName:SpiderSolitaire *>> D:\mylog.txt
+Dism /online /Disable-Feature /FeatureName:InboxGames *>> D:\mylog.txt
+Dism /online /Disable-Feature /FeatureName:Hearts *>> D:\mylog.txt
+Dism /online /Disable-Feature /FeatureName:FreeCell *>> D:\mylog.txt
+Dism /online /Disable-Feature /FeatureName:Minesweeper *>> D:\mylog.txt
+Dism /online /Disable-Feature /FeatureName:PurblePlace *>> D:\mylog.txt
+Dism /online /Disable-Feature /FeatureName:Chess *>> D:\mylog.txt
+Dism /online /Disable-Feature /FeatureName:Shanghai *>> D:\mylog.txt
+Dism /online /Disable-Feature /FeatureName:Internet Games *>> D:\mylog.txt
+Dism /online /Disable-Feature /FeatureName:Internet Checkers *>> D:\mylog.txt
+Dism /online /Disable-Feature /FeatureName:Internet Backgammon *>> D:\mylog.txt
+Dism /online /Disable-Feature /FeatureName:Internet Spades *>> D:\mylog.txt
+
+
+
+############################################################################################
+
+#Import registry settings for IE
+regedit /s "D:\IESettings.reg"
+
+############################################################################################
+
+#Import registry settings for Firefox (overwrites the existing prefs.js file)
+
+robocopy D:\ "C:\Users\DGarcia\AppData\Roaming\Mozilla\Firefox\Profiles\xu9151am.default" prefs.js /is
+
+############################################################################################
+
+#Import registry settings for Chrome, overwrites existing files in the directory
+
+robocopy "D:\User Data" "C:\Users\%userprofile%\Local Settings\Application Data\Google\Chrome\UserData" /E /is
+
+############################################################################################
+
+#Set IQN Background
+
+robocopy D:\ C:\temp "IQN Wallpaper 2015.jpg"
+
+Set-ItemProperty -Path "HKCU:Control Panel\Desktop" -Name WallPaper -value "C:\temp\IQN Wallpaper 2015.jpg"
+
+############################################################################################
+
+#Disables User Account Control
+
+Set-ItemProperty -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Policies\System" -Name EnableLUA -Value 0 *>> D:\mylog.txt
+
+
+
+### Lee - Suggestions
+
+############################################################################################
+
+# Disable any unwanted services
+#Adaptive Brightness, Disk Defragmenter, Tablet PC Input, Windows Media Player Network Sharing
+Set-Service -Name "SensrSvc" -StartupType Disabled *>> D:\mylog.txt
+Set-Service -Name "defragsvc" -StartupType Disabled *>> D:\mylog.txt
+Set-Service -Name "TabletInputService" -StartupType Disabled *>> D:\mylog.txt
+Set-Service -Name "WMPNetworkSvc" -StartupType Disabled *>> D:\mylog.txt
+
+############################################################################################
+
+# Make My Computer Icon match computer name (Have to get permissions to that registry key first)
+
+#Get from Lee
+
+############################################################################################
+
+# Any network optimizations
+
+#Point DNS Servers to 8.8.8.8 and 8.8.4.4?
+
+############################################################################################
+
+# Add logging of some kind to ensure that all commands executed properly
+
+############################################################################################
+
+#Disable Guest account
+
+cmd /c "net user guest /active:no" *>> D:\mylog.txt
+
+############################################################################################
+
+
+#Install/Configure Symantec encryption
+#This is run last because encypting the hard drive takes a long time
+
+robocopy  "\\iqn-it00\apps\Symantec\_SEE Client Install Packages\SEE Upgrade 8.2.1" C:\temp "Symantec Endpoint Encryption Framework Client_x64.msi" | Out-Null
+cmd /c "C:\temp\Symantec Endpoint Encryption Framework Client_x64.msi /s" *>> D:\mylog.txt
+
+robocopy "\\iqn-it00\apps\Symantec\_SEE Client Install Packages\SEE Upgrade 8.2.1" C:\temp "Symantec Endpoint Encryption Full Disk Edition Client_x64.msi"
+cmd /c "C:\temp\Symantec Endpoint Encryption Full Disk Edition Client_x64.msi /s" *>> D:\mylog.txt
+
+START "C:\Program Files\Symantec\Symantec Endpoint Encryption Clients\Client Console\EAFRCliStart.exe" *>> D:\mylog.txt
+
+############################################################################################
+
+
+
+
+
+
+
+
+
+
+
